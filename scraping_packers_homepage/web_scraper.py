@@ -1,6 +1,6 @@
 from bs4 import BeautifulSoup, NavigableString, Tag, Comment, Doctype, ProcessingInstruction
 from requests.adapters import HTTPAdapter, Retry
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import requests, time, json
 
 from scraping_packers_homepage.llm_models.a_tag_selector import get_url_list_with_llm
@@ -49,7 +49,7 @@ def extract_page(url, is_recursive=False):
         url = "https://" + url
 
     try :
-        response = session.get(url, timeout=15, headers=headers, verify=False)
+        response = session.get(url, timeout=15, headers=headers)
     except requests.ConnectionError as ce:
         if not is_recursive:
             url_list = recovery_url(url)
@@ -149,8 +149,10 @@ def get_domain_a_tag_list(soup, main_url):
     main_domain = get_domain(main_url)
     distinct_a_list = {}
     for link in a_list:
-        if get_domain(link.get('href')).startswith(main_domain):
-            distinct_a_list[link.get('href').strip('/')] = link
+        full_url = urljoin(main_domain, link.get('href')).strip('/')
+        # 
+        if get_domain(full_url).startswith(main_domain) and urlparse(full_url).path and not full_url.endswith('.pdf'):
+            distinct_a_list[full_url] = link
     
     if distinct_a_list:
         return list(distinct_a_list.values())
@@ -180,6 +182,43 @@ def check_exists_column_contents(df, target_column_list):
     return results
 
 
+def split_url_list(distinct_a_list):
+    result_listset = []
+    tmp_list = []
+
+    decompose_tag_list = ['svg', 'path', 'img']
+
+    total = 0
+    for a in distinct_a_list:
+        for decompose_tag in decompose_tag_list:
+            for t in a.find_all(decompose_tag):
+                t.decompose()
+
+        str_a = str(a)
+        if total and total + len(str_a) > SPLIT_LENGTH:
+            result_listset.append(tmp_list)
+            total = 0
+            tmp_list = []
+        else:
+            total += len(str_a)
+            tmp_list.append(a)
+    if tmp_list:
+        result_listset.append(tmp_list)
+    
+    return result_listset
+
+
+def get_url_list(llm, distinct_a_list):
+    total_result_list = []
+    url_list_set = split_url_list(distinct_a_list)
+    for url_list in url_list_set:
+        sub_result_list = get_url_list_with_llm(llm, url_list)
+        if sub_result_list:
+            total_result_list.extend(sub_result_list)
+
+    return total_result_list
+
+
 def run(main_url, llm, target_column_list, required_column_list=['mail', 'phone', 'address', 'products']):
     print(f'** [main page] 조회 - {main_url}')
     status, response = extract_page(main_url)
@@ -203,7 +242,7 @@ def run(main_url, llm, target_column_list, required_column_list=['mail', 'phone'
         distinct_a_list = get_domain_a_tag_list(soup, main_url)
         if distinct_a_list:
             print(f'  ** [llm] 회사 정보와 관련있는 a tag 선별')
-            page_list = get_url_list_with_llm(llm, distinct_a_list)
+            page_list = get_url_list(llm, distinct_a_list)
         
             for sub_url in page_list:
                 print(f'  ** [sub page] 조회 - {sub_url}')
