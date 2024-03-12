@@ -16,4 +16,4 @@ def search(keyword, search_engine_id, api_key, **kwargs):
     if response.status_code == 200:
         return response.json()
     else:
-        raise Exception(f"[{response.status_code}] response.content")
+        raise Exception(f"[{response.status_code}] {response.text}")
